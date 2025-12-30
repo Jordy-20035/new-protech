@@ -1,0 +1,483 @@
+<?php
+require_once 'config.php';
+require_once 'auth_functions.php';
+require_once 'db_functions.php';
+
+require_user_type('worker');
+
+$user_id = $_SESSION['user_id'];
+$user_name = $_SESSION['user_name'];
+$initials = get_initials($user_name);
+
+// Get worker info
+$worker = get_worker_by_user_id($user_id);
+$worker_id = $worker['id'];
+
+// Get status filter
+$status_filter = $_GET['status'] ?? 'pending';
+
+// Get bookings based on filter
+if ($status_filter === 'all') {
+    $bookings = get_worker_bookings($worker_id);
+} else {
+    $bookings = get_worker_bookings($worker_id, $status_filter);
+}
+
+// Messages
+$success = $_SESSION['success'] ?? '';
+$error = $_SESSION['error'] ?? '';
+unset($_SESSION['success'], $_SESSION['error']);
+
+$unread_notifications = count_unread_notifications($user_id);
+?>
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Job Requests - ProTech</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+            background: #f9fafb;
+            color: #111827;
+        }
+        .top-nav {
+            background: white;
+            border-bottom: 1px solid #e5e7eb;
+            padding: 1rem 2rem;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            position: sticky;
+            top: 0;
+            z-index: 100;
+        }
+        .logo {
+            display: flex;
+            align-items: center;
+            gap: 0.75rem;
+            font-size: 1.5rem;
+            font-weight: bold;
+            color: #10b981;
+            text-decoration: none;
+        }
+        .logo-icon {
+            width: 40px;
+            height: 40px;
+            background: linear-gradient(135deg, #10b981 0%, #059669 100%);
+            border-radius: 10px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+        .logo-icon svg { width: 24px; height: 24px; fill: white; }
+        .top-nav-right { display: flex; align-items: center; gap: 1.5rem; }
+        .icon-btn {
+            position: relative;
+            background: none;
+            border: none;
+            cursor: pointer;
+            padding: 0.5rem;
+            border-radius: 8px;
+            text-decoration: none;
+        }
+        .icon-btn:hover { background: #f3f4f6; }
+        .icon-btn svg { width: 24px; height: 24px; stroke: #6b7280; fill: none; stroke-width: 2; }
+        .notification-badge {
+            position: absolute;
+            top: 0;
+            right: 0;
+            min-width: 18px;
+            height: 18px;
+            background: #ef4444;
+            border-radius: 50%;
+            color: white;
+            font-size: 0.7rem;
+            font-weight: 600;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+        .user-menu {
+            display: flex;
+            align-items: center;
+            gap: 0.75rem;
+            padding: 0.5rem 1rem;
+            border-radius: 8px;
+            text-decoration: none;
+            color: inherit;
+        }
+        .user-menu:hover { background: #f3f4f6; }
+        .user-avatar {
+            width: 36px;
+            height: 36px;
+            border-radius: 50%;
+            background: linear-gradient(135deg, #10b981 0%, #059669 100%);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: white;
+            font-weight: 600;
+            font-size: 0.875rem;
+        }
+        .main-container {
+            max-width: 1200px;
+            margin: 0 auto;
+            padding: 2rem;
+        }
+        .page-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 2rem;
+        }
+        .page-header h1 { font-size: 2rem; }
+        .back-link {
+            display: inline-flex;
+            align-items: center;
+            gap: 0.5rem;
+            color: #6b7280;
+            text-decoration: none;
+            font-size: 0.875rem;
+        }
+        .back-link:hover { color: #10b981; }
+        .back-link svg { width: 16px; height: 16px; stroke: currentColor; fill: none; stroke-width: 2; }
+        .filter-tabs {
+            display: flex;
+            gap: 0.5rem;
+            background: white;
+            padding: 0.5rem;
+            border-radius: 8px;
+            border: 1px solid #e5e7eb;
+        }
+        .filter-tab {
+            padding: 0.5rem 1rem;
+            border-radius: 6px;
+            text-decoration: none;
+            color: #6b7280;
+            font-size: 0.875rem;
+            font-weight: 500;
+            transition: all 0.3s;
+        }
+        .filter-tab:hover { background: #f3f4f6; color: #111827; }
+        .filter-tab.active { background: #10b981; color: white; }
+        .alert {
+            padding: 1rem;
+            border-radius: 8px;
+            margin-bottom: 1.5rem;
+        }
+        .alert-success {
+            background: #d1fae5;
+            color: #065f46;
+            border: 1px solid #a7f3d0;
+        }
+        .alert-error {
+            background: #fee2e2;
+            color: #991b1b;
+            border: 1px solid #fecaca;
+        }
+        .jobs-list {
+            display: flex;
+            flex-direction: column;
+            gap: 1rem;
+        }
+        .job-card {
+            background: white;
+            border-radius: 12px;
+            border: 1px solid #e5e7eb;
+            padding: 1.5rem;
+            transition: all 0.3s;
+        }
+        .job-card:hover {
+            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
+            border-color: #10b981;
+        }
+        .job-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: start;
+            margin-bottom: 1rem;
+        }
+        .job-main {
+            display: flex;
+            gap: 1rem;
+        }
+        .client-avatar {
+            width: 56px;
+            height: 56px;
+            border-radius: 50%;
+            background: linear-gradient(135deg, #6366f1 0%, #8b5cf6 100%);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: white;
+            font-weight: 600;
+            font-size: 1.25rem;
+            flex-shrink: 0;
+        }
+        .job-info h3 {
+            font-size: 1.125rem;
+            margin-bottom: 0.25rem;
+        }
+        .job-info .client-name {
+            color: #6b7280;
+            font-size: 0.875rem;
+            margin-bottom: 0.25rem;
+        }
+        .job-price {
+            font-size: 1.5rem;
+            font-weight: 700;
+            color: #10b981;
+        }
+        .job-status {
+            padding: 0.25rem 0.75rem;
+            border-radius: 6px;
+            font-size: 0.75rem;
+            font-weight: 600;
+        }
+        .job-status.pending { background: #fef3c7; color: #92400e; }
+        .job-status.confirmed { background: #d1fae5; color: #065f46; }
+        .job-status.in_progress { background: #e0e7ff; color: #3730a3; }
+        .job-status.completed { background: #dbeafe; color: #1e40af; }
+        .job-status.cancelled { background: #fee2e2; color: #991b1b; }
+        .job-details {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 1.5rem;
+            margin-bottom: 1rem;
+            padding: 1rem;
+            background: #f9fafb;
+            border-radius: 8px;
+        }
+        .job-detail {
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+            color: #6b7280;
+            font-size: 0.875rem;
+        }
+        .job-detail svg {
+            width: 16px;
+            height: 16px;
+            stroke: currentColor;
+            fill: none;
+            stroke-width: 2;
+        }
+        .job-description {
+            color: #6b7280;
+            font-size: 0.875rem;
+            line-height: 1.6;
+            margin-bottom: 1rem;
+            padding: 1rem;
+            background: #f9fafb;
+            border-radius: 8px;
+        }
+        .job-actions {
+            display: flex;
+            gap: 0.75rem;
+        }
+        .btn {
+            padding: 0.625rem 1.25rem;
+            border-radius: 6px;
+            font-weight: 600;
+            border: none;
+            cursor: pointer;
+            font-size: 0.875rem;
+            text-decoration: none;
+            transition: all 0.3s;
+        }
+        .btn-success {
+            background: linear-gradient(135deg, #10b981 0%, #059669 100%);
+            color: white;
+        }
+        .btn-success:hover {
+            box-shadow: 0 2px 8px rgba(16, 185, 129, 0.3);
+        }
+        .btn-primary {
+            background: linear-gradient(135deg, #2563eb 0%, #4f46e5 100%);
+            color: white;
+        }
+        .btn-outline {
+            background: transparent;
+            color: #6b7280;
+            border: 1px solid #d1d5db;
+        }
+        .btn-outline:hover { background: #f9fafb; }
+        .btn-danger {
+            background: #fee2e2;
+            color: #991b1b;
+            border: 1px solid #fecaca;
+        }
+        .btn-danger:hover { background: #fecaca; }
+        .empty-state {
+            text-align: center;
+            padding: 4rem 2rem;
+            background: white;
+            border-radius: 12px;
+            border: 1px solid #e5e7eb;
+        }
+        .empty-state svg {
+            width: 80px;
+            height: 80px;
+            margin: 0 auto 1.5rem;
+            stroke: #d1d5db;
+            fill: none;
+            stroke-width: 1.5;
+        }
+        .empty-state h3 { font-size: 1.25rem; margin-bottom: 0.5rem; }
+        .empty-state p { color: #6b7280; }
+        @media (max-width: 768px) {
+            .page-header { flex-direction: column; gap: 1rem; align-items: flex-start; }
+            .filter-tabs { flex-wrap: wrap; }
+            .job-header { flex-direction: column; gap: 1rem; }
+            .job-details { flex-direction: column; gap: 0.75rem; }
+            .job-actions { flex-wrap: wrap; }
+        }
+    </style>
+</head>
+<body>
+    <nav class="top-nav">
+        <a href="index.html" class="logo">
+            <div class="logo-icon">
+                <svg viewBox="0 0 512 512">
+                    <path d="M323.5,140.1c-7.2-8.2-18.4-13-30.1-13h-1.5c-1.2,0.1-3.3,0.3-6.2,0.5c-4.5,0.3-10.6,0.8-17.9,1.3c-14.5,1-33.1,2.2-52.6,2.9c-38.9,1.4-83.1,0.2-113-10.1c-5.1-1.8-10.6-2.7-16.1-2.7c-11.9,0-23.3,4.8-31.6,13.4c-8.9,9.2-13.4,21.6-12.5,34.4l0,0.1l5.7,79.5c0.9,12.2,6.7,23.5,16.2,31.1l99.4,79.5c8.5,6.8,19,10.5,29.8,10.5c5.5,0,11-0.9,16.3-2.8l0.1,0c0.2-0.1,0.5-0.2,0.7-0.2l121.1-48.4c10.7-4.3,19.2-12.5,23.6-23.1c4.4-10.5,4.7-22.2,0.7-32.9L323.5,140.1z"/>
+                    <path d="M471.1,119.3c-8.3-8.6-19.7-13.4-31.6-13.4c-5.5,0-11,0.9-16.1,2.7c-29.9,10.3-74.1,11.5-113,10.1c-19.5-0.7-38.1-1.9-52.6-2.9c-7.3-0.5-13.4-1-17.9-1.3c-2.9-0.2-5-0.4-6.2-0.5h-1.5c-11.8,0-22.9,4.7-30.1,13l-37.5,119.9c-4,10.8-3.7,22.4,0.7,32.9c4.4,10.5,12.9,18.7,23.6,23.1l121.1,48.4c0.2,0.1,0.5,0.2,0.7,0.2l0.1,0c5.3,1.9,10.8,2.8,16.3,2.8c10.8,0,21.4-3.7,29.8-10.5l99.4-79.5c9.5-7.6,15.3-18.9,16.2-31.1l5.7-79.5l0-0.1C484.5,140.9,480,128.5,471.1,119.3z"/>
+                </svg>
+            </div>
+            ProTech
+        </a>
+        <div class="top-nav-right">
+            <a href="notifications.php" class="icon-btn">
+                <svg viewBox="0 0 24 24">
+                    <path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"/>
+                    <path d="M13.73 21a2 2 0 0 1-3.46 0"/>
+                </svg>
+                <?php if ($unread_notifications > 0): ?>
+                <span class="notification-badge"><?php echo $unread_notifications; ?></span>
+                <?php endif; ?>
+            </a>
+            <a href="worker.php" class="user-menu">
+                <div class="user-avatar"><?php echo htmlspecialchars($initials); ?></div>
+            </a>
+        </div>
+    </nav>
+
+    <div class="main-container">
+        <a href="worker.php" class="back-link">
+            <svg viewBox="0 0 24 24"><path d="m15 18-6-6 6-6"/></svg>
+            Back to Dashboard
+        </a>
+        
+        <div class="page-header">
+            <h1>Job Requests</h1>
+            <div class="filter-tabs">
+                <a href="job_requests.php?status=pending" class="filter-tab <?php echo $status_filter === 'pending' ? 'active' : ''; ?>">Pending</a>
+                <a href="job_requests.php?status=confirmed" class="filter-tab <?php echo $status_filter === 'confirmed' ? 'active' : ''; ?>">Confirmed</a>
+                <a href="job_requests.php?status=in_progress" class="filter-tab <?php echo $status_filter === 'in_progress' ? 'active' : ''; ?>">In Progress</a>
+                <a href="job_requests.php?status=completed" class="filter-tab <?php echo $status_filter === 'completed' ? 'active' : ''; ?>">Completed</a>
+                <a href="job_requests.php?status=all" class="filter-tab <?php echo $status_filter === 'all' ? 'active' : ''; ?>">All</a>
+            </div>
+        </div>
+
+        <?php if ($success): ?>
+        <div class="alert alert-success"><?php echo htmlspecialchars($success); ?></div>
+        <?php endif; ?>
+        
+        <?php if ($error): ?>
+        <div class="alert alert-error"><?php echo htmlspecialchars($error); ?></div>
+        <?php endif; ?>
+
+        <?php if (empty($bookings)): ?>
+        <div class="empty-state">
+            <svg viewBox="0 0 24 24">
+                <path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/>
+                <circle cx="9" cy="7" r="4"/>
+            </svg>
+            <h3>No <?php echo $status_filter !== 'all' ? $status_filter : ''; ?> job requests</h3>
+            <p>New requests from clients will appear here</p>
+        </div>
+        <?php else: ?>
+        <div class="jobs-list">
+            <?php foreach ($bookings as $job): ?>
+            <div class="job-card">
+                <div class="job-header">
+                    <div class="job-main">
+                        <div class="client-avatar"><?php echo get_initials($job['client_name']); ?></div>
+                        <div class="job-info">
+                            <h3><?php echo htmlspecialchars($job['title']); ?></h3>
+                            <p class="client-name"><?php echo htmlspecialchars($job['client_name']); ?></p>
+                            <span class="job-status <?php echo $job['status']; ?>">
+                                <?php echo ucfirst(str_replace('_', ' ', $job['status'])); ?>
+                            </span>
+                        </div>
+                    </div>
+                    <div class="job-price"><?php echo format_price($job['price']); ?></div>
+                </div>
+                
+                <div class="job-details">
+                    <div class="job-detail">
+                        <svg viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="18" rx="2" ry="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/></svg>
+                        <?php echo format_date($job['scheduled_date']); ?>
+                    </div>
+                    <div class="job-detail">
+                        <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
+                        <?php echo format_time($job['scheduled_time']); ?>
+                    </div>
+                    <div class="job-detail">
+                        <svg viewBox="0 0 24 24"><path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z"/><circle cx="12" cy="10" r="3"/></svg>
+                        <?php echo htmlspecialchars($job['address']); ?>
+                    </div>
+                    <div class="job-detail">
+                        <svg viewBox="0 0 24 24"><path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6 19.79 19.79 0 0 1-3.07-8.67A2 2 0 0 1 4.11 2h3a2 2 0 0 1 2 1.72"/></svg>
+                        <?php echo htmlspecialchars($job['client_phone']); ?>
+                    </div>
+                </div>
+                
+                <?php if (!empty($job['description'])): ?>
+                <div class="job-description">
+                    <?php echo htmlspecialchars($job['description']); ?>
+                </div>
+                <?php endif; ?>
+                
+                <div class="job-actions">
+                    <?php if ($job['status'] === 'pending'): ?>
+                        <form action="handle_booking.php" method="POST" style="display:inline;">
+                            <input type="hidden" name="booking_id" value="<?php echo $job['id']; ?>">
+                            <input type="hidden" name="action" value="accept">
+                            <button type="submit" class="btn btn-success">Accept Job</button>
+                        </form>
+                        <form action="handle_booking.php" method="POST" style="display:inline;">
+                            <input type="hidden" name="booking_id" value="<?php echo $job['id']; ?>">
+                            <input type="hidden" name="action" value="decline">
+                            <button type="submit" class="btn btn-outline">Decline</button>
+                        </form>
+                    <?php elseif ($job['status'] === 'confirmed'): ?>
+                        <form action="handle_booking.php" method="POST" style="display:inline;">
+                            <input type="hidden" name="booking_id" value="<?php echo $job['id']; ?>">
+                            <input type="hidden" name="action" value="start">
+                            <button type="submit" class="btn btn-primary">Start Job</button>
+                        </form>
+                        <form action="handle_booking.php" method="POST" style="display:inline;">
+                            <input type="hidden" name="booking_id" value="<?php echo $job['id']; ?>">
+                            <input type="hidden" name="action" value="decline">
+                            <button type="submit" class="btn btn-danger">Cancel</button>
+                        </form>
+                    <?php elseif ($job['status'] === 'in_progress'): ?>
+                        <form action="handle_booking.php" method="POST" style="display:inline;">
+                            <input type="hidden" name="booking_id" value="<?php echo $job['id']; ?>">
+                            <input type="hidden" name="action" value="complete">
+                            <button type="submit" class="btn btn-success">Mark Complete</button>
+                        </form>
+                    <?php endif; ?>
+                    <a href="messages.php?booking_id=<?php echo $job['id']; ?>" class="btn btn-outline">Message Client</a>
+                </div>
+            </div>
+            <?php endforeach; ?>
+        </div>
+        <?php endif; ?>
+    </div>
+</body>
+</html>
+
