@@ -12,46 +12,37 @@ function get_workers($filters = []) {
             JOIN users u ON w.user_id = u.id 
             WHERE 1=1";
     $params = [];
-    $types = "";
     
     if (!empty($filters['skill'])) {
-        $sql .= " AND w.skills LIKE ?";
-        $params[] = "%" . $filters['skill'] . "%";
-        $types .= "s";
+        $sql .= " AND w.skills ILIKE :skill";
+        $params['skill'] = "%" . $filters['skill'] . "%";
     }
     
     if (!empty($filters['service_area'])) {
-        $sql .= " AND w.service_area LIKE ?";
-        $params[] = "%" . $filters['service_area'] . "%";
-        $types .= "s";
+        $sql .= " AND w.service_area ILIKE :service_area";
+        $params['service_area'] = "%" . $filters['service_area'] . "%";
     }
     
     if (!empty($filters['min_rating'])) {
-        $sql .= " AND w.rating >= ?";
-        $params[] = $filters['min_rating'];
-        $types .= "d";
+        $sql .= " AND w.rating >= :min_rating";
+        $params['min_rating'] = $filters['min_rating'];
     }
     
     if (isset($filters['is_available'])) {
-        $sql .= " AND w.is_available = ?";
-        $params[] = $filters['is_available'] ? 1 : 0;
-        $types .= "i";
+        $sql .= " AND w.is_available = :is_available";
+        $params['is_available'] = $filters['is_available'] ? 't' : 'f';
     }
     
     $sql .= " ORDER BY w.rating DESC, w.total_jobs DESC";
     
     if (!empty($filters['limit'])) {
-        $sql .= " LIMIT ?";
-        $params[] = $filters['limit'];
-        $types .= "i";
+        $sql .= " LIMIT :limit";
+        $params['limit'] = $filters['limit'];
     }
     
     $stmt = $conn->prepare($sql);
-    if (!empty($params)) {
-        $stmt->bind_param($types, ...$params);
-    }
-    $stmt->execute();
-    return $stmt->get_result()->fetch_all(MYSQLI_ASSOC);
+    $stmt->execute($params);
+    return $stmt->fetchAll();
 }
 
 // Get single worker by ID
@@ -60,11 +51,10 @@ function get_worker($worker_id) {
     $sql = "SELECT w.*, u.name, u.email, u.phone, u.avatar 
             FROM workers w 
             JOIN users u ON w.user_id = u.id 
-            WHERE w.id = ?";
+            WHERE w.id = :worker_id";
     $stmt = $conn->prepare($sql);
-    $stmt->bind_param("i", $worker_id);
-    $stmt->execute();
-    return $stmt->get_result()->fetch_assoc();
+    $stmt->execute(['worker_id' => $worker_id]);
+    return $stmt->fetch();
 }
 
 // Get worker by user_id
@@ -73,11 +63,10 @@ function get_worker_by_user_id($user_id) {
     $sql = "SELECT w.*, u.name, u.email, u.phone, u.avatar 
             FROM workers w 
             JOIN users u ON w.user_id = u.id 
-            WHERE w.user_id = ?";
+            WHERE w.user_id = :user_id";
     $stmt = $conn->prepare($sql);
-    $stmt->bind_param("i", $user_id);
-    $stmt->execute();
-    return $stmt->get_result()->fetch_assoc();
+    $stmt->execute(['user_id' => $user_id]);
+    return $stmt->fetch();
 }
 
 // ==================== BOOKING FUNCTIONS ====================
@@ -86,26 +75,27 @@ function get_worker_by_user_id($user_id) {
 function create_booking($user_id, $worker_id, $data) {
     global $conn;
     
-    $sql = "INSERT INTO bookings (user_id, worker_id, service_category_id, title, description, 
-            scheduled_date, scheduled_time, estimated_duration, address, price) 
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)";
-    
-    $stmt = $conn->prepare($sql);
-    $stmt->bind_param("iiissssisd", 
-        $user_id, 
-        $worker_id, 
-        $data['service_category_id'],
-        $data['title'],
-        $data['description'],
-        $data['scheduled_date'],
-        $data['scheduled_time'],
-        $data['estimated_duration'],
-        $data['address'],
-        $data['price']
-    );
-    
-    if ($stmt->execute()) {
-        $booking_id = $stmt->insert_id;
+    try {
+        $sql = "INSERT INTO bookings (user_id, worker_id, service_category_id, title, description, 
+                scheduled_date, scheduled_time, estimated_duration, address, price) 
+                VALUES (:user_id, :worker_id, :service_category_id, :title, :description, 
+                :scheduled_date, :scheduled_time, :estimated_duration, :address, :price)";
+        
+        $stmt = $conn->prepare($sql);
+        $stmt->execute([
+            'user_id' => $user_id,
+            'worker_id' => $worker_id,
+            'service_category_id' => $data['service_category_id'] ?: null,
+            'title' => $data['title'],
+            'description' => $data['description'],
+            'scheduled_date' => $data['scheduled_date'],
+            'scheduled_time' => $data['scheduled_time'],
+            'estimated_duration' => $data['estimated_duration'],
+            'address' => $data['address'],
+            'price' => $data['price']
+        ]);
+        
+        $booking_id = $conn->lastInsertId();
         
         // Create notification for worker
         $worker = get_worker($worker_id);
@@ -114,8 +104,10 @@ function create_booking($user_id, $worker_id, $data) {
             'booking', "booking.php?id=$booking_id");
         
         return ['success' => true, 'booking_id' => $booking_id];
+        
+    } catch (PDOException $e) {
+        return ['success' => false, 'message' => 'Failed to create booking: ' . $e->getMessage()];
     }
-    return ['success' => false, 'message' => 'Failed to create booking'];
 }
 
 // Get bookings for a user (client)
@@ -128,28 +120,24 @@ function get_user_bookings($user_id, $status = null, $limit = null) {
             JOIN workers w ON b.worker_id = w.id 
             JOIN users u ON w.user_id = u.id
             LEFT JOIN service_categories sc ON b.service_category_id = sc.id
-            WHERE b.user_id = ?";
-    $params = [$user_id];
-    $types = "i";
+            WHERE b.user_id = :user_id";
+    $params = ['user_id' => $user_id];
     
     if ($status) {
-        $sql .= " AND b.status = ?";
-        $params[] = $status;
-        $types .= "s";
+        $sql .= " AND b.status = :status";
+        $params['status'] = $status;
     }
     
     $sql .= " ORDER BY b.scheduled_date DESC, b.scheduled_time DESC";
     
     if ($limit) {
-        $sql .= " LIMIT ?";
-        $params[] = $limit;
-        $types .= "i";
+        $sql .= " LIMIT :limit";
+        $params['limit'] = $limit;
     }
     
     $stmt = $conn->prepare($sql);
-    $stmt->bind_param($types, ...$params);
-    $stmt->execute();
-    return $stmt->get_result()->fetch_all(MYSQLI_ASSOC);
+    $stmt->execute($params);
+    return $stmt->fetchAll();
 }
 
 // Get bookings for a worker
@@ -161,37 +149,34 @@ function get_worker_bookings($worker_id, $status = null, $limit = null) {
             FROM bookings b 
             JOIN users u ON b.user_id = u.id
             LEFT JOIN service_categories sc ON b.service_category_id = sc.id
-            WHERE b.worker_id = ?";
-    $params = [$worker_id];
-    $types = "i";
+            WHERE b.worker_id = :worker_id";
+    $params = ['worker_id' => $worker_id];
     
     if ($status) {
         if (is_array($status)) {
-            $placeholders = implode(',', array_fill(0, count($status), '?'));
-            $sql .= " AND b.status IN ($placeholders)";
-            foreach ($status as $s) {
-                $params[] = $s;
-                $types .= "s";
+            $placeholders = [];
+            foreach ($status as $i => $s) {
+                $key = "status_$i";
+                $placeholders[] = ":$key";
+                $params[$key] = $s;
             }
+            $sql .= " AND b.status IN (" . implode(',', $placeholders) . ")";
         } else {
-            $sql .= " AND b.status = ?";
-            $params[] = $status;
-            $types .= "s";
+            $sql .= " AND b.status = :status";
+            $params['status'] = $status;
         }
     }
     
     $sql .= " ORDER BY b.scheduled_date ASC, b.scheduled_time ASC";
     
     if ($limit) {
-        $sql .= " LIMIT ?";
-        $params[] = $limit;
-        $types .= "i";
+        $sql .= " LIMIT :limit";
+        $params['limit'] = $limit;
     }
     
     $stmt = $conn->prepare($sql);
-    $stmt->bind_param($types, ...$params);
-    $stmt->execute();
-    return $stmt->get_result()->fetch_all(MYSQLI_ASSOC);
+    $stmt->execute($params);
+    return $stmt->fetchAll();
 }
 
 // Get today's schedule for a worker
@@ -202,26 +187,24 @@ function get_worker_today_schedule($worker_id) {
     $sql = "SELECT b.*, u.name as client_name, u.phone as client_phone
             FROM bookings b 
             JOIN users u ON b.user_id = u.id
-            WHERE b.worker_id = ? AND b.scheduled_date = ? 
+            WHERE b.worker_id = :worker_id AND b.scheduled_date = :today 
             AND b.status IN ('confirmed', 'in_progress')
             ORDER BY b.scheduled_time ASC";
     
     $stmt = $conn->prepare($sql);
-    $stmt->bind_param("is", $worker_id, $today);
-    $stmt->execute();
-    return $stmt->get_result()->fetch_all(MYSQLI_ASSOC);
+    $stmt->execute(['worker_id' => $worker_id, 'today' => $today]);
+    return $stmt->fetchAll();
 }
 
 // Update booking status
 function update_booking_status($booking_id, $status, $user_id = null) {
     global $conn;
     
-    // Verify the user has permission to update this booking
-    $sql = "UPDATE bookings SET status = ? WHERE id = ?";
-    $stmt = $conn->prepare($sql);
-    $stmt->bind_param("si", $status, $booking_id);
-    
-    if ($stmt->execute()) {
+    try {
+        $sql = "UPDATE bookings SET status = :status, updated_at = CURRENT_TIMESTAMP WHERE id = :booking_id";
+        $stmt = $conn->prepare($sql);
+        $stmt->execute(['status' => $status, 'booking_id' => $booking_id]);
+        
         // Get booking details for notification
         $booking = get_booking($booking_id);
         
@@ -235,7 +218,6 @@ function update_booking_status($booking_id, $status, $user_id = null) {
                 "Your booking '{$booking['title']}' has been completed. Please leave a review!", 
                 'booking', "review.php?booking_id=$booking_id");
         } elseif ($status === 'cancelled') {
-            // Notify both parties
             $worker = get_worker($booking['worker_id']);
             create_notification($booking['user_id'], 'Booking Cancelled', 
                 "Your booking '{$booking['title']}' has been cancelled.", 'booking');
@@ -244,8 +226,10 @@ function update_booking_status($booking_id, $status, $user_id = null) {
         }
         
         return ['success' => true];
+        
+    } catch (PDOException $e) {
+        return ['success' => false, 'message' => 'Failed to update booking: ' . $e->getMessage()];
     }
-    return ['success' => false, 'message' => 'Failed to update booking'];
 }
 
 // Get single booking
@@ -262,12 +246,11 @@ function get_booking($booking_id) {
             JOIN workers w ON b.worker_id = w.id
             JOIN users wu ON w.user_id = wu.id
             LEFT JOIN service_categories sc ON b.service_category_id = sc.id
-            WHERE b.id = ?";
+            WHERE b.id = :booking_id";
     
     $stmt = $conn->prepare($sql);
-    $stmt->bind_param("i", $booking_id);
-    $stmt->execute();
-    return $stmt->get_result()->fetch_assoc();
+    $stmt->execute(['booking_id' => $booking_id]);
+    return $stmt->fetch();
 }
 
 // ==================== STATISTICS FUNCTIONS ====================
@@ -279,32 +262,28 @@ function get_user_stats($user_id) {
     $stats = [];
     
     // Active bookings
-    $sql = "SELECT COUNT(*) as count FROM bookings WHERE user_id = ? AND status IN ('pending', 'confirmed', 'in_progress')";
+    $sql = "SELECT COUNT(*) as count FROM bookings WHERE user_id = :user_id AND status IN ('pending', 'confirmed', 'in_progress')";
     $stmt = $conn->prepare($sql);
-    $stmt->bind_param("i", $user_id);
-    $stmt->execute();
-    $stats['active_bookings'] = $stmt->get_result()->fetch_assoc()['count'];
+    $stmt->execute(['user_id' => $user_id]);
+    $stats['active_bookings'] = $stmt->fetch()['count'];
     
     // Completed services
-    $sql = "SELECT COUNT(*) as count FROM bookings WHERE user_id = ? AND status = 'completed'";
+    $sql = "SELECT COUNT(*) as count FROM bookings WHERE user_id = :user_id AND status = 'completed'";
     $stmt = $conn->prepare($sql);
-    $stmt->bind_param("i", $user_id);
-    $stmt->execute();
-    $stats['completed_services'] = $stmt->get_result()->fetch_assoc()['count'];
+    $stmt->execute(['user_id' => $user_id]);
+    $stats['completed_services'] = $stmt->fetch()['count'];
     
     // Total spent
-    $sql = "SELECT COALESCE(SUM(price), 0) as total FROM bookings WHERE user_id = ? AND status = 'completed' AND payment_status = 'paid'";
+    $sql = "SELECT COALESCE(SUM(price), 0) as total FROM bookings WHERE user_id = :user_id AND status = 'completed' AND payment_status = 'paid'";
     $stmt = $conn->prepare($sql);
-    $stmt->bind_param("i", $user_id);
-    $stmt->execute();
-    $stats['total_spent'] = $stmt->get_result()->fetch_assoc()['total'];
+    $stmt->execute(['user_id' => $user_id]);
+    $stats['total_spent'] = $stmt->fetch()['total'];
     
     // Reviews given
-    $sql = "SELECT COUNT(*) as count FROM reviews WHERE user_id = ?";
+    $sql = "SELECT COUNT(*) as count FROM reviews WHERE user_id = :user_id";
     $stmt = $conn->prepare($sql);
-    $stmt->bind_param("i", $user_id);
-    $stmt->execute();
-    $stats['reviews_given'] = $stmt->get_result()->fetch_assoc()['count'];
+    $stmt->execute(['user_id' => $user_id]);
+    $stats['reviews_given'] = $stmt->fetch()['count'];
     
     return $stats;
 }
@@ -318,31 +297,28 @@ function get_worker_stats($worker_id) {
     // This month's earnings
     $first_day = date('Y-m-01');
     $sql = "SELECT COALESCE(SUM(price), 0) as total FROM bookings 
-            WHERE worker_id = ? AND status = 'completed' AND scheduled_date >= ?";
+            WHERE worker_id = :worker_id AND status = 'completed' AND scheduled_date >= :first_day";
     $stmt = $conn->prepare($sql);
-    $stmt->bind_param("is", $worker_id, $first_day);
-    $stmt->execute();
-    $stats['monthly_earnings'] = $stmt->get_result()->fetch_assoc()['total'];
+    $stmt->execute(['worker_id' => $worker_id, 'first_day' => $first_day]);
+    $stats['monthly_earnings'] = $stmt->fetch()['total'];
     
     // Pending requests
-    $sql = "SELECT COUNT(*) as count FROM bookings WHERE worker_id = ? AND status = 'pending'";
+    $sql = "SELECT COUNT(*) as count FROM bookings WHERE worker_id = :worker_id AND status = 'pending'";
     $stmt = $conn->prepare($sql);
-    $stmt->bind_param("i", $worker_id);
-    $stmt->execute();
-    $stats['pending_requests'] = $stmt->get_result()->fetch_assoc()['count'];
+    $stmt->execute(['worker_id' => $worker_id]);
+    $stats['pending_requests'] = $stmt->fetch()['count'];
     
     // Scheduled jobs
-    $sql = "SELECT COUNT(*) as count FROM bookings WHERE worker_id = ? AND status IN ('confirmed', 'in_progress')";
+    $sql = "SELECT COUNT(*) as count FROM bookings WHERE worker_id = :worker_id AND status IN ('confirmed', 'in_progress')";
     $stmt = $conn->prepare($sql);
-    $stmt->bind_param("i", $worker_id);
-    $stmt->execute();
-    $stats['scheduled_jobs'] = $stmt->get_result()->fetch_assoc()['count'];
+    $stmt->execute(['worker_id' => $worker_id]);
+    $stats['scheduled_jobs'] = $stmt->fetch()['count'];
     
     // Get worker rating info
     $worker = get_worker($worker_id);
-    $stats['rating'] = $worker['rating'];
-    $stats['total_reviews'] = $worker['total_reviews'];
-    $stats['total_jobs'] = $worker['total_jobs'];
+    $stats['rating'] = $worker['rating'] ?? 0;
+    $stats['total_reviews'] = $worker['total_reviews'] ?? 0;
+    $stats['total_jobs'] = $worker['total_jobs'] ?? 0;
     
     return $stats;
 }
@@ -353,28 +329,34 @@ function get_worker_stats($worker_id) {
 function create_review($booking_id, $user_id, $worker_id, $rating, $comment) {
     global $conn;
     
-    // Check if review already exists
-    $check = "SELECT id FROM reviews WHERE booking_id = ?";
-    $stmt = $conn->prepare($check);
-    $stmt->bind_param("i", $booking_id);
-    $stmt->execute();
-    if ($stmt->get_result()->num_rows > 0) {
-        return ['success' => false, 'message' => 'Review already exists for this booking'];
-    }
-    
-    $sql = "INSERT INTO reviews (booking_id, user_id, worker_id, rating, comment) VALUES (?, ?, ?, ?, ?)";
-    $stmt = $conn->prepare($sql);
-    $stmt->bind_param("iiiis", $booking_id, $user_id, $worker_id, $rating, $comment);
-    
-    if ($stmt->execute()) {
+    try {
+        // Check if review already exists
+        $check = $conn->prepare("SELECT id FROM reviews WHERE booking_id = :booking_id");
+        $check->execute(['booking_id' => $booking_id]);
+        if ($check->rowCount() > 0) {
+            return ['success' => false, 'message' => 'Review already exists for this booking'];
+        }
+        
+        $sql = "INSERT INTO reviews (booking_id, user_id, worker_id, rating, comment) VALUES (:booking_id, :user_id, :worker_id, :rating, :comment)";
+        $stmt = $conn->prepare($sql);
+        $stmt->execute([
+            'booking_id' => $booking_id,
+            'user_id' => $user_id,
+            'worker_id' => $worker_id,
+            'rating' => $rating,
+            'comment' => $comment
+        ]);
+        
         // Notify worker about the review
         $worker = get_worker($worker_id);
         create_notification($worker['user_id'], 'New Review', 
             "You received a new $rating-star review!", 'review');
         
         return ['success' => true];
+        
+    } catch (PDOException $e) {
+        return ['success' => false, 'message' => 'Failed to create review: ' . $e->getMessage()];
     }
-    return ['success' => false, 'message' => 'Failed to create review'];
 }
 
 // Get reviews for a worker
@@ -385,14 +367,13 @@ function get_worker_reviews($worker_id, $limit = 10) {
             FROM reviews r
             JOIN users u ON r.user_id = u.id
             JOIN bookings b ON r.booking_id = b.id
-            WHERE r.worker_id = ?
+            WHERE r.worker_id = :worker_id
             ORDER BY r.created_at DESC
-            LIMIT ?";
+            LIMIT :limit";
     
     $stmt = $conn->prepare($sql);
-    $stmt->bind_param("ii", $worker_id, $limit);
-    $stmt->execute();
-    return $stmt->get_result()->fetch_all(MYSQLI_ASSOC);
+    $stmt->execute(['worker_id' => $worker_id, 'limit' => $limit]);
+    return $stmt->fetchAll();
 }
 
 // Get pending reviews for a user (completed bookings without reviews)
@@ -404,13 +385,12 @@ function get_pending_reviews($user_id) {
             JOIN workers w ON b.worker_id = w.id
             JOIN users wu ON w.user_id = wu.id
             LEFT JOIN reviews r ON b.id = r.booking_id
-            WHERE b.user_id = ? AND b.status = 'completed' AND r.id IS NULL
+            WHERE b.user_id = :user_id AND b.status = 'completed' AND r.id IS NULL
             ORDER BY b.scheduled_date DESC";
     
     $stmt = $conn->prepare($sql);
-    $stmt->bind_param("i", $user_id);
-    $stmt->execute();
-    return $stmt->get_result()->fetch_all(MYSQLI_ASSOC);
+    $stmt->execute(['user_id' => $user_id]);
+    return $stmt->fetchAll();
 }
 
 // ==================== NOTIFICATION FUNCTIONS ====================
@@ -419,47 +399,56 @@ function get_pending_reviews($user_id) {
 function create_notification($user_id, $title, $message, $type = 'system', $link = null) {
     global $conn;
     
-    $sql = "INSERT INTO notifications (user_id, title, message, type, link) VALUES (?, ?, ?, ?, ?)";
-    $stmt = $conn->prepare($sql);
-    $stmt->bind_param("issss", $user_id, $title, $message, $type, $link);
-    return $stmt->execute();
+    try {
+        $sql = "INSERT INTO notifications (user_id, title, message, type, link) VALUES (:user_id, :title, :message, :type, :link)";
+        $stmt = $conn->prepare($sql);
+        return $stmt->execute([
+            'user_id' => $user_id,
+            'title' => $title,
+            'message' => $message,
+            'type' => $type,
+            'link' => $link
+        ]);
+    } catch (PDOException $e) {
+        return false;
+    }
 }
 
 // Get user notifications
 function get_notifications($user_id, $unread_only = false, $limit = 20) {
     global $conn;
     
-    $sql = "SELECT * FROM notifications WHERE user_id = ?";
+    $sql = "SELECT * FROM notifications WHERE user_id = :user_id";
+    $params = ['user_id' => $user_id];
+    
     if ($unread_only) {
         $sql .= " AND is_read = FALSE";
     }
-    $sql .= " ORDER BY created_at DESC LIMIT ?";
+    $sql .= " ORDER BY created_at DESC LIMIT :limit";
+    $params['limit'] = $limit;
     
     $stmt = $conn->prepare($sql);
-    $stmt->bind_param("ii", $user_id, $limit);
-    $stmt->execute();
-    return $stmt->get_result()->fetch_all(MYSQLI_ASSOC);
+    $stmt->execute($params);
+    return $stmt->fetchAll();
 }
 
 // Count unread notifications
 function count_unread_notifications($user_id) {
     global $conn;
     
-    $sql = "SELECT COUNT(*) as count FROM notifications WHERE user_id = ? AND is_read = FALSE";
+    $sql = "SELECT COUNT(*) as count FROM notifications WHERE user_id = :user_id AND is_read = FALSE";
     $stmt = $conn->prepare($sql);
-    $stmt->bind_param("i", $user_id);
-    $stmt->execute();
-    return $stmt->get_result()->fetch_assoc()['count'];
+    $stmt->execute(['user_id' => $user_id]);
+    return $stmt->fetch()['count'];
 }
 
 // Mark notification as read
 function mark_notification_read($notification_id) {
     global $conn;
     
-    $sql = "UPDATE notifications SET is_read = TRUE WHERE id = ?";
+    $sql = "UPDATE notifications SET is_read = TRUE WHERE id = :notification_id";
     $stmt = $conn->prepare($sql);
-    $stmt->bind_param("i", $notification_id);
-    return $stmt->execute();
+    return $stmt->execute(['notification_id' => $notification_id]);
 }
 
 // ==================== SERVICE CATEGORIES ====================
@@ -468,8 +457,8 @@ function get_service_categories() {
     global $conn;
     
     $sql = "SELECT * FROM service_categories ORDER BY name";
-    $result = $conn->query($sql);
-    return $result->fetch_all(MYSQLI_ASSOC);
+    $stmt = $conn->query($sql);
+    return $stmt->fetchAll();
 }
 
 // ==================== FAVORITES ====================
@@ -477,19 +466,21 @@ function get_service_categories() {
 function add_favorite($user_id, $worker_id) {
     global $conn;
     
-    $sql = "INSERT IGNORE INTO favorites (user_id, worker_id) VALUES (?, ?)";
-    $stmt = $conn->prepare($sql);
-    $stmt->bind_param("ii", $user_id, $worker_id);
-    return $stmt->execute();
+    try {
+        $sql = "INSERT INTO favorites (user_id, worker_id) VALUES (:user_id, :worker_id) ON CONFLICT DO NOTHING";
+        $stmt = $conn->prepare($sql);
+        return $stmt->execute(['user_id' => $user_id, 'worker_id' => $worker_id]);
+    } catch (PDOException $e) {
+        return false;
+    }
 }
 
 function remove_favorite($user_id, $worker_id) {
     global $conn;
     
-    $sql = "DELETE FROM favorites WHERE user_id = ? AND worker_id = ?";
+    $sql = "DELETE FROM favorites WHERE user_id = :user_id AND worker_id = :worker_id";
     $stmt = $conn->prepare($sql);
-    $stmt->bind_param("ii", $user_id, $worker_id);
-    return $stmt->execute();
+    return $stmt->execute(['user_id' => $user_id, 'worker_id' => $worker_id]);
 }
 
 function get_user_favorites($user_id) {
@@ -499,23 +490,21 @@ function get_user_favorites($user_id) {
             FROM favorites f
             JOIN workers w ON f.worker_id = w.id
             JOIN users u ON w.user_id = u.id
-            WHERE f.user_id = ?
+            WHERE f.user_id = :user_id
             ORDER BY f.created_at DESC";
     
     $stmt = $conn->prepare($sql);
-    $stmt->bind_param("i", $user_id);
-    $stmt->execute();
-    return $stmt->get_result()->fetch_all(MYSQLI_ASSOC);
+    $stmt->execute(['user_id' => $user_id]);
+    return $stmt->fetchAll();
 }
 
 function is_favorite($user_id, $worker_id) {
     global $conn;
     
-    $sql = "SELECT id FROM favorites WHERE user_id = ? AND worker_id = ?";
+    $sql = "SELECT id FROM favorites WHERE user_id = :user_id AND worker_id = :worker_id";
     $stmt = $conn->prepare($sql);
-    $stmt->bind_param("ii", $user_id, $worker_id);
-    $stmt->execute();
-    return $stmt->get_result()->num_rows > 0;
+    $stmt->execute(['user_id' => $user_id, 'worker_id' => $worker_id]);
+    return $stmt->rowCount() > 0;
 }
 
 // ==================== HELPER FUNCTIONS ====================
@@ -556,4 +545,3 @@ function time_ago($datetime) {
     return 'Just now';
 }
 ?>
-

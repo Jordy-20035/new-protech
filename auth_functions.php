@@ -21,27 +21,32 @@ function register_user($name, $email, $phone, $password, $user_type) {
     // Hash password
     $hashed_password = password_hash($password, PASSWORD_DEFAULT);
     
-    // Check if email already exists
-    $check_email = "SELECT id FROM users WHERE email = ?";
-    $stmt = $conn->prepare($check_email);
-    $stmt->bind_param("s", $email);
-    $stmt->execute();
-    $result = $stmt->get_result();
-    
-    if ($result->num_rows > 0) {
-        return ['success' => false, 'message' => 'Email already exists'];
-    }
-    
-    // Insert user
-    $sql = "INSERT INTO users (name, email, phone, password, user_type) VALUES (?, ?, ?, ?, ?)";
-    $stmt = $conn->prepare($sql);
-    $stmt->bind_param("sssss", $name, $email, $phone, $hashed_password, $user_type);
-    
-    if ($stmt->execute()) {
-        $user_id = $stmt->insert_id;
+    try {
+        // Check if email already exists
+        $check_email = "SELECT id FROM users WHERE email = :email";
+        $stmt = $conn->prepare($check_email);
+        $stmt->execute(['email' => $email]);
+        
+        if ($stmt->rowCount() > 0) {
+            return ['success' => false, 'message' => 'Email already exists'];
+        }
+        
+        // Insert user
+        $sql = "INSERT INTO users (name, email, phone, password, user_type) VALUES (:name, :email, :phone, :password, :user_type)";
+        $stmt = $conn->prepare($sql);
+        $stmt->execute([
+            'name' => $name,
+            'email' => $email,
+            'phone' => $phone,
+            'password' => $hashed_password,
+            'user_type' => $user_type
+        ]);
+        
+        $user_id = $conn->lastInsertId();
         return ['success' => true, 'user_id' => $user_id, 'message' => 'Registration successful'];
-    } else {
-        return ['success' => false, 'message' => 'Registration failed'];
+        
+    } catch (PDOException $e) {
+        return ['success' => false, 'message' => 'Registration failed: ' . $e->getMessage()];
     }
 }
 
@@ -58,15 +63,21 @@ function register_worker($name, $email, $phone, $password, $service_area, $skill
         $skills = sanitize_input($skills);
         $experience = intval($experience);
         
-        // Insert worker details
-        $sql = "INSERT INTO workers (user_id, service_area, skills, experience) VALUES (?, ?, ?, ?)";
-        $stmt = $conn->prepare($sql);
-        $stmt->bind_param("issi", $user_id, $service_area, $skills, $experience);
-        
-        if ($stmt->execute()) {
+        try {
+            // Insert worker details
+            $sql = "INSERT INTO workers (user_id, service_area, skills, experience) VALUES (:user_id, :service_area, :skills, :experience)";
+            $stmt = $conn->prepare($sql);
+            $stmt->execute([
+                'user_id' => $user_id,
+                'service_area' => $service_area,
+                'skills' => $skills,
+                'experience' => $experience
+            ]);
+            
             return ['success' => true, 'message' => 'Worker registration successful'];
-        } else {
-            return ['success' => false, 'message' => 'Worker details registration failed'];
+            
+        } catch (PDOException $e) {
+            return ['success' => false, 'message' => 'Worker details registration failed: ' . $e->getMessage()];
         }
     }
     
@@ -79,34 +90,37 @@ function login_user($email, $password) {
     
     $email = sanitize_input($email);
     
-    $sql = "SELECT id, name, email, password, user_type FROM users WHERE email = ?";
-    $stmt = $conn->prepare($sql);
-    $stmt->bind_param("s", $email);
-    $stmt->execute();
-    $result = $stmt->get_result();
-    
-    if ($result->num_rows === 1) {
-        $user = $result->fetch_assoc();
+    try {
+        $sql = "SELECT id, name, email, password, user_type FROM users WHERE email = :email";
+        $stmt = $conn->prepare($sql);
+        $stmt->execute(['email' => $email]);
         
-        // Verify password
-        if (password_verify($password, $user['password'])) {
-            // Set session variables
-            $_SESSION['user_id'] = $user['id'];
-            $_SESSION['user_name'] = $user['name'];
-            $_SESSION['user_email'] = $user['email'];
-            $_SESSION['user_type'] = $user['user_type'];
-            $_SESSION['logged_in'] = true;
+        if ($stmt->rowCount() === 1) {
+            $user = $stmt->fetch();
             
-            return [
-                'success' => true, 
-                'user_type' => $user['user_type'],
-                'message' => 'Login successful'
-            ];
+            // Verify password
+            if (password_verify($password, $user['password'])) {
+                // Set session variables
+                $_SESSION['user_id'] = $user['id'];
+                $_SESSION['user_name'] = $user['name'];
+                $_SESSION['user_email'] = $user['email'];
+                $_SESSION['user_type'] = $user['user_type'];
+                $_SESSION['logged_in'] = true;
+                
+                return [
+                    'success' => true, 
+                    'user_type' => $user['user_type'],
+                    'message' => 'Login successful'
+                ];
+            } else {
+                return ['success' => false, 'message' => 'Invalid password'];
+            }
         } else {
-            return ['success' => false, 'message' => 'Invalid password'];
+            return ['success' => false, 'message' => 'User not found'];
         }
-    } else {
-        return ['success' => false, 'message' => 'User not found'];
+        
+    } catch (PDOException $e) {
+        return ['success' => false, 'message' => 'Login failed: ' . $e->getMessage()];
     }
 }
 
@@ -139,7 +153,7 @@ function require_login() {
 function require_user_type($type) {
     require_login();
     if (get_user_type() !== $type) {
-        header("Location: unauthorized.php");
+        header("Location: auth.html");
         exit();
     }
 }
