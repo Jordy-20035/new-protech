@@ -17,7 +17,7 @@ define('DB_HOST', 'localhost');      // Usually 'localhost' or '127.0.0.1'
 define('DB_PORT', '5432');           // Default PostgreSQL port is 5432
 define('DB_NAME', 'protech_db');     // Database name
 define('DB_USER', 'postgres');       // Your PostgreSQL username (default is 'postgres')
-define('DB_PASS', '');               // Your PostgreSQL password (set during installation)
+define('DB_PASS', 'postgres123');               // Your PostgreSQL password (set during installation)
 
 // =====================================================
 // HOW TO FIND/SET YOUR POSTGRESQL PASSWORD:
